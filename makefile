@@ -1,11 +1,12 @@
 CFLAGS=-Wall -Wextra -pedantic -O2 -std=c99
+TARGET=hexy
 
 .PHONY: all test clean
 
-all: hex
+all: ${TARGET}
 
-test: hex
-	./hex hex.c
+test: ${TARGET}
+	./${TARGET} ${TARGET}.c
 
 clean:
-	rm -fv *.exe hex
+	rm -fv *.exe ${TARGET}
