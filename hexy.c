@@ -14,6 +14,31 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include "hexy.h"
+
+//#ifndef HEXY_API
+//#define HEXY_API
+//#endif
+//
+//#ifndef HEXY_EXTERN
+//#define HEXY_EXTERN extern
+//#endif
+//
+//#ifdef HEXY_IMPLEMENTATION
+//#ifdef HEXY_UNIT_TESTS
+//#ifdef HEXY_DEFINE_MAIN
+//
+//#ifdef __cplusplus
+//extern "C" {
+//#endif
+//
+//
+//#ifdef __cplusplus
+//}
+//#endif /* __cplusplus */
+//
+
+
 
 #define HEXY_PNUM_BUF_SIZE (64/*64 bit number in base 2*/ + 1/* for '+'/'-' */ + 1/*NUL terminator*/)
 
@@ -28,12 +53,12 @@
 #define HEXY_MAX_NCOLS (64)
 #endif
 
-#ifndef MIN
-#define MIN(X, Y) ((X) < (Y) ? (X) : (Y))
+#ifndef HEXY_MIN
+#define HEXY_MIN(X, Y) ((X) < (Y) ? (X) : (Y))
 #endif
 
-#ifndef MAX
-#define MAX(X, Y) ((X) < (Y) ? (Y) : (X))
+#ifndef HEXY_MAX
+#define HEXY_MAX(X, Y) ((X) < (Y) ? (Y) : (X))
 #endif
 
 typedef unsigned long hexy_unum_t;
@@ -71,6 +96,7 @@ typedef struct {
 	     newlines_off;          /* Turn off: Print a new line, columnizing output */
 
 	int base,                   /* Base to print, if 0 auto-select, otherwise valid bases are between 2 and 36 */
+	    abase,                  /* Base to print addresses in, if 0 used `base` */
 	    ncols;                  /* Number of columns to print, must not exceed HEXY_MAX_NCOLS, if 0 auto-select*/
 } hexy_t; /* Hexdump structure, for all your hex-dumping needs */
 
@@ -183,8 +209,8 @@ static int hexy_uilog(hexy_unum_t n, hexy_unum_t base) {
 static int hexy_aligned_print_number(hexy_io_t *io, hexy_unum_t u, hexy_unum_t base, hexy_unum_t max, int leading_zeros, int leading_char) {
 	assert(io);
 	const int mint = hexy_uilog(max, base) - hexy_uilog(u, base);
-	leading_zeros = MAX(0, leading_zeros);
-	leading_zeros = MIN(mint, leading_zeros);
+	leading_zeros = HEXY_MAX(0, leading_zeros);
+	leading_zeros = HEXY_MIN(mint, leading_zeros);
 	return hexy_print_number(io, u, base, leading_zeros, leading_char);
 }
 
@@ -215,7 +241,7 @@ static int hexy_space(hexy_t *h) {
 
 static int hexy_spaces(hexy_t *h, int spaces) {
 	assert(h);
-	spaces = MAX(spaces, 0);
+	spaces = HEXY_MAX(spaces, 0);
 	for (int i = 0; i < spaces; i++)
 		if (hexy_space(h) < 0)
 			return -1;
@@ -238,7 +264,7 @@ static int hexy_paddr(hexy_t *h, hexy_unum_t addr) {
 	assert(h);
 	if (h->addresses_off)
 		return 0;
-	if (hexy_aligned_print_number(&h->io, addr, h->base, HEXY_UNUM_MAX, 4, ' ') < 0)
+	if (hexy_aligned_print_number(&h->io, addr, h->abase, HEXY_UNUM_MAX, 4, ' ') < 0)
 		return -1;
 	if (hexy_puts(&h->io, h->sep_adr) < 0)
 		return -1;
@@ -262,6 +288,7 @@ static int hexy_config_default(hexy_t *h) {
 	assert(h);
 	h->base  = h->base  ? h->base  : 16 ;
 	h->ncols = h->ncols ? h->ncols : 16 ;
+	h->abase = h->abase ? h->abase : h->base;
 
 	h->sep_adr = h->sep_adr ? h->sep_adr : HEXY_SEP_ADR;
 	h->sep_eol = h->sep_eol ? h->sep_eol : HEXY_SEP_EOL;
@@ -278,7 +305,7 @@ static int hexy(hexy_t *h) {
 	if (hexy_config_default(h) < 0)
 		return -1;
 
-	const int byte_align = 2; // TODO: BUG: Dependent on base!
+	const int byte_align = hexy_uilog(255, h->base);
 
 	for (int end = 0; !end;) {
 		h->buf_used = 0;
@@ -310,6 +337,8 @@ static int hexy(hexy_t *h) {
 			for (size_t i = 0; i < h->buf_used; i++)
 				if (hexy_pchar(h, h->buf[i]) < 0)
 					return -1;
+			if (hexy_spaces(h, missing) < 0) 
+				return -1;
 			if (hexy_puts(io, h->sep_ch2) < 0)
 				return -1;
 		}
@@ -331,10 +360,10 @@ fail:
 
 typedef struct {
 	char *arg;   /* parsed argument */
-	int error,   /* turn error reporting on/off */
-	    index,   /* index into argument list */
+	int index,   /* index into argument list */
 	    option,  /* parsed option */
 	    reset;   /* set to reset */
+	FILE *error; /* error stream to print to (set to NULL to turn off */
 	char *place; /* internal use: scanner position */
 	int  init;   /* internal use: initialized or not */
 } hexy_getopt_t;     /* getopt clone; with a few modifications */
@@ -342,7 +371,10 @@ typedef struct {
 /* Adapted from: <https://stackoverflow.com/questions/10404448>, this
  * could be extended to parse out numeric values, and do other things, but
  * that is not needed here. The function and structure should be turned
- * into a header only library. */
+ * into a header only library.
+ *
+ * TODO: Handle number parsing (signed/unsigned).
+ * TODO: Print out minimal help from string */
 static int hexy_getopt(hexy_getopt_t *opt, const int argc, char *const argv[], const char *fmt) {
 	assert(opt);
 	assert(fmt);
@@ -376,7 +408,7 @@ static int hexy_getopt(hexy_getopt_t *opt, const int argc, char *const argv[], c
 		if (!*opt->place)
 			opt->index++;
 		if (opt->error && *fmt != ':')
-			if (fprintf(stderr, "illegal option -- %c\n", opt->option) < 0)
+			if (fprintf(opt->error, "illegal option -- %c\n", opt->option) < 0)
 				return BADIO_E;
 		return BADCH_E;
 	}
@@ -393,7 +425,7 @@ static int hexy_getopt(hexy_getopt_t *opt, const int argc, char *const argv[], c
 			if (*fmt == ':')
 				return BADARG_E;
 			if (opt->error)
-				if (fprintf(stderr, "option requires an argument -- %c\n", opt->option) < 0)
+				if (fprintf(opt->error, "option requires an argument -- %c\n", opt->option) < 0)
 					return BADIO_E;
 			return BADCH_E;
 		} else	{ /* white space */
@@ -405,15 +437,49 @@ static int hexy_getopt(hexy_getopt_t *opt, const int argc, char *const argv[], c
 	return opt->option; /* dump back option letter */
 }
 
+#include <stdlib.h>
+
+static int help(FILE *out, const char *arg0) {
+	assert(out);
+	assert(arg0);
+	const char *fmt = "Usage: %s [-bBn #] [-h] files...\n\n\
+Author:  " HEXY_AUTHOR "\n\
+Repo:    " HEXY_REPO "\n\
+Email:   " HEXY_EMAIL "\n\
+License: " HEXY_LICENSE "\n\
+Version: " HEXY_VERSION "\n\n\
+A customizable hex-dump library and utility.\n\n\
+Options:\n\n\
+\t-h\tPrint this help message and exit.\n\
+\t-b #\tSet base for output, valid ranges are from 2 to 36.\n\
+\t-B #\tSet base for address printing, uses same base as byte output if not set.\n\
+\t-n #\tSet number of columns of values to print out.\n\
+\n\
+This program returns zero on success and non-zero on failure.\n\n";
+	return fprintf(out, fmt, arg0);
+}
+
 int main(int argc, char **argv) {
 	hexy_t h = {
 		.io = { .get = hexy_file_get, .put = hexy_file_put, .out = stdout, .in = NULL, }, 
 	};
-	for (int i = 1; i < argc; i++) {
+	hexy_getopt_t opt = { .error = stderr, };
+
+	for (int ch = 0; (ch = hexy_getopt(&opt, argc, argv, "hb:B:n:s:")) != -1;) {
+		switch (ch) {
+		case 'h': return help(stderr, argv[0]) < 0;
+		case 'b': h.base = atol(opt.arg); break; // TODO: Add to integer support to getopt, range check
+		case 'B': h.abase = atol(opt.arg); break; // TODO: Add to getopt, range check
+		case 'n': h.ncols = atol(opt.arg); break; // TODO: Auto scale number of cols based off of base if not explicitly set?
+		default: return 1;
+		}
+	}
+
+	for (int i = opt.index; i < argc; i++) {
 		errno = 0;
 		FILE *f = fopen(argv[i], "rb");
 		if (!f) {
-			(void)fprintf(stderr, "Cannot open file %s (mode %s):%s\n", argv[i], "rb", strerror(errno));
+			(void)fprintf(stderr, "Cannot open file %s (mode %s): %s\n", argv[i], "rb", strerror(errno));
 			return 1;
 		}
 		h.io.in = f;
