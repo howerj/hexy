@@ -47,7 +47,10 @@
 #define HEXY_SEP_CH1 "\t|"
 #define HEXY_SEP_CH2 "|"
 #define HEXY_SEP_BYT " "
-#define HEXY_NON_GRAPHIC_REPLACEMENT_CHAR ' '
+
+#ifndef HEXY_NON_GRAPHIC_REPLACEMENT_CHAR
+#define HEXY_NON_GRAPHIC_REPLACEMENT_CHAR '.'
+#endif
 
 #ifndef HEXY_MAX_NCOLS
 #define HEXY_MAX_NCOLS (64)
@@ -61,6 +64,10 @@
 #define HEXY_MAX(X, Y) ((X) < (Y) ? (Y) : (X))
 #endif
 
+#ifndef HEXY_ELINE
+#define HEXY_ELINE (-__LINE__)
+#endif
+
 typedef unsigned long hexy_unum_t;
 
 #define HEXY_UNUM_MAX (ULONG_MAX)
@@ -70,9 +77,12 @@ typedef struct {
 	size_t used, length;
 } hexy_buffer_t;
 
+typedef int (*hexy_get_fn)(void *in);          /* callback for retrieving a byte, similar to `fgetc`. */
+typedef int (*hexy_put_fn)(void *out, int ch); /* callback for outputting a byte, similar to `fputc`. */
+
 typedef struct {
-	int (*get)(void *in);          /* return negative on error, a byte (0-255) otherwise */
-	int (*put)(void *out, int ch); /* return ch on no error */
+	hexy_get_fn get;               /* return negative on error, a byte (0-255) otherwise */
+	hexy_put_fn put;               /* return ch on no error, or negative on error */
 	void *in, *out;                /* passed to 'get' and 'put' respectively */
 	size_t read, wrote;            /* read only, bytes 'get' and 'put' respectively */
 	int error;                     /* an error has occurred */
@@ -120,7 +130,7 @@ static int hexy_hexy_unum_to_string(char buf[static 64/*base 2*/ + 1/*'+'/'-'*/ 
 	size_t i = 0;
 	hexy_unum_t dv = in;
 	if (!hexy_is_valid_base(base))
-		return -1;
+		return HEXY_ELINE;
 	do
 		buf[i++] = hexy_string_digits[dv % base];
 	while ((dv /= base));
@@ -134,16 +144,16 @@ static int hexy_buffer_get(void *in) {
 	assert(b);
 	assert(b->b);
 	if (b->used >= b->length)
-		return -1;
+		return HEXY_ELINE;
 	return b->b[b->used++];
 }
 
-static int hexy_buffer_put(const int ch, void *out) {
+static int hexy_buffer_put(void *out, const int ch) {
 	hexy_buffer_t *b = out;
 	assert(b);
 	assert(b->b);
 	if (b->used >= b->length)
-		return -1;
+		return HEXY_ELINE;
 	return b->b[b->used++] = ch;
 }
 
@@ -160,7 +170,7 @@ static int hexy_file_put(void *out, int ch) {
 static int hexy_get(hexy_io_t *io) {
 	assert(io);
 	if (io->error)
-		return -1;
+		return HEXY_ELINE;
 	const int r = io->get(io->in);
 	assert(r <= 255);
 	io->read += r >= 0;
@@ -170,7 +180,7 @@ static int hexy_get(hexy_io_t *io) {
 static int hexy_put(hexy_io_t *io, const int ch) {
 	assert(io);
 	if (io->error)
-		return -1;
+		return HEXY_ELINE;
 	const int r = io->put(io->out, ch);
 	assert(r <= 255);
 	io->wrote += r >= 0;
@@ -182,7 +192,7 @@ static int hexy_put(hexy_io_t *io, const int ch) {
 static int hexy_puts(hexy_io_t *io, const char *s) {
 	for (int ch = 0; (ch = *s++);)
 		if (hexy_put(io, ch) < 0)
-			return -1;
+			return HEXY_ELINE;
 	return 0;
 }
 
@@ -190,13 +200,13 @@ static int hexy_print_number(hexy_io_t *io, hexy_unum_t u, hexy_unum_t base, int
 	assert(io);
 	for (int i = 0; i < leading_zeros; i++)
 		if (hexy_put(io, leading_char) < 0)
-			return -1;
+			return HEXY_ELINE;
 	char buf[HEXY_PNUM_BUF_SIZE] = { 0, };
 	if (hexy_hexy_unum_to_string(buf, u, base) < 0)
-		return -1;
+		return HEXY_ELINE;
 	for (size_t i = 0; i < HEXY_PNUM_BUF_SIZE && buf[i]; i++)
 		if (hexy_put(io, buf[i]) < 0)
-			return -1;
+			return HEXY_ELINE;
 	return 0;
 }
 
@@ -228,14 +238,14 @@ static int hexy_newline(hexy_t *h) {
 	assert(h);
 	if (hexy_newlines_enabled(h))
 		if (hexy_puts(&h->io, h->sep_eol) < 0)
-			return -1;
+			return HEXY_ELINE;
 	return 0;
 }
 
 static int hexy_space(hexy_t *h) {
 	assert(h);
 	if (hexy_put(&h->io, ' ') < 0)
-		return -1;
+		return HEXY_ELINE;
 	return 0;
 }
 
@@ -244,7 +254,7 @@ static int hexy_spaces(hexy_t *h, int spaces) {
 	spaces = HEXY_MAX(spaces, 0);
 	for (int i = 0; i < spaces; i++)
 		if (hexy_space(h) < 0)
-			return -1;
+			return HEXY_ELINE;
 	return 0;
 }
 
@@ -256,7 +266,7 @@ static int hexy_pchar(hexy_t *h, int ch) {
 	assert(h);
 	ch = hexy_isgraph(ch) ? ch : HEXY_NON_GRAPHIC_REPLACEMENT_CHAR;
 	if (hexy_put(&h->io, ch) < 0)
-		return -1;
+		return HEXY_ELINE;
 	return 0;
 }
 
@@ -265,22 +275,22 @@ static int hexy_paddr(hexy_t *h, hexy_unum_t addr) {
 	if (h->addresses_off)
 		return 0;
 	if (hexy_aligned_print_number(&h->io, addr, h->abase, HEXY_UNUM_MAX, 4, ' ') < 0)
-		return -1;
+		return HEXY_ELINE;
 	if (hexy_puts(&h->io, h->sep_adr) < 0)
-		return -1;
+		return HEXY_ELINE;
 	return 0;
 }
 
 static int hexy_validate(hexy_t *h) {
 	assert(h);
 	if (h->io.error)
-		return -1;
+		return HEXY_ELINE;
 	if (!hexy_is_valid_base(h->base))
-		return -1;
+		return HEXY_ELINE;
 	if (h->ncols < 1 || h->ncols > HEXY_MAX_NCOLS)
-		return -1;
+		return HEXY_ELINE;
 	if (h->buf_used > sizeof (h->buf))
-		return -1;
+		return HEXY_ELINE;
 	return 0;
 }
 
@@ -303,7 +313,7 @@ static int hexy(hexy_t *h) {
 	assert(h);
 	hexy_io_t *io = &h->io;
 	if (hexy_config_default(h) < 0)
-		return -1;
+		return HEXY_ELINE;
 
 	const int byte_align = hexy_uilog(255, h->base);
 
@@ -320,42 +330,42 @@ static int hexy(hexy_t *h) {
 			h->buf[h->buf_used++] = ch;
 		}
 		if (hexy_paddr(h, h->address) < 0)
-			return -1;
+			return HEXY_ELINE;
 		for (size_t i = 0; i < h->buf_used; i++) {
 			if (hexy_aligned_print_number(io, h->buf[i], h->base, 255, byte_align, '0') < 0)
-				return -1;
+				return HEXY_ELINE;
 			if (hexy_puts(io, h->sep_byt) < 0)
-				return -1;
+				return HEXY_ELINE;
 		}
 		if (!h->chars_off) {
 			const int missing = h->ncols - h->buf_used;
 			const int bseplen = strlen(h->sep_byt);
 			if (hexy_spaces(h, (byte_align + bseplen) * missing) < 0) /* TODO: Use h->sep_byt? */
-				return -1;
+				return HEXY_ELINE;
 			if (hexy_puts(io, h->sep_ch1) < 0)
-				return -1;
+				return HEXY_ELINE;
 			for (size_t i = 0; i < h->buf_used; i++)
 				if (hexy_pchar(h, h->buf[i]) < 0)
-					return -1;
-			if (hexy_spaces(h, missing) < 0) 
-				return -1;
+					return HEXY_ELINE;
+			if (hexy_spaces(h, missing) < 0)
+				return HEXY_ELINE;
 			if (hexy_puts(io, h->sep_ch2) < 0)
-				return -1;
+				return HEXY_ELINE;
 		}
 		if (hexy_newline(h) < 0)
-			return -1;
+			return HEXY_ELINE;
 		if ((h->address + h->buf_used) <= h->address)
 			goto fail;
 		h->address += h->buf_used;
 		h->buf_used = 0;
 	}
 	if (hexy_newline(h) < 0)
-		return -1;
+		return HEXY_ELINE;
 done:
 	return 0;
 fail:
 	io->error = -1;
-	return -1;
+	return HEXY_ELINE;
 }
 
 typedef struct {
@@ -459,9 +469,37 @@ This program returns zero on success and non-zero on failure.\n\n";
 	return fprintf(out, fmt, arg0);
 }
 
+#if 0
+static int hexyio(hexy_get_fn get, void *in, hexy_put_fn put, void *out) {
+	assert(get);
+	assert(put);
+	hexy_t h = { .io = { .get = get, .put = put, .in  = in, .out = out, }, };
+	return hexy(&h);
+}
+
+static int hexy_bb(const uint8_t *in, size_t inlen, uint8_t *out, size_t *outlen) {
+	assert(in);
+	assert(out);
+	assert(outlen);
+	hexy_buffer_t inb = { .b = (uint8_t*)in, .length = inlen, };
+	hexy_buffer_t outb = { .b = out, .length = *outlen, };
+	*outlen = 0;
+	const int r = hexyio(hexy_buffer_get, &inb, hexy_buffer_put, &outb);
+	if (r < 0)
+		return HEXY_ELINE;
+	*outlen = outb.used;
+	return 0;
+}
+#endif
+
 int main(int argc, char **argv) {
 	hexy_t h = {
-		.io = { .get = hexy_file_get, .put = hexy_file_put, .out = stdout, .in = NULL, }, 
+		.io = { 
+			.get = hexy_file_get, 
+			.put = hexy_file_put, 
+			.out = stdout, 
+			.in  = NULL, 
+		}, 
 	};
 	hexy_getopt_t opt = { .error = stderr, };
 
@@ -471,7 +509,7 @@ int main(int argc, char **argv) {
 		case 'b': h.base = atol(opt.arg); break; // TODO: Add to integer support to getopt, range check
 		case 'B': h.abase = atol(opt.arg); break; // TODO: Add to getopt, range check
 		case 'n': h.ncols = atol(opt.arg); break; // TODO: Auto scale number of cols based off of base if not explicitly set?
-		default: return 1;
+		default: (void)fprintf(stderr, "Invalid option '%c', consult help (-h)\n", ch); return 1;
 		}
 	}
 
