@@ -1,9 +1,9 @@
 /* Project: Generic Hexdump routines
  * Missing: Grouping bytes and endianess conversion, turn into library, 
- * signed printing, header-only library, unit tests, CLI options,
+ * signed printing, header-only library, unit tests, 
  * customizable separators strings (not chars, NULL = default), colors, undump,
- * fix bugs, prefix with hexy_, left/right align, turn off FILE* support,
- * C++ integration, help text in header, overflow checks, BUILD_BUG_ON,
+ * fix bugs, prefix with hexy_, turn off FILE* support,
+ * C++ integration, overflow checks, BUILD_BUG_ON,
  * more assertions, export helper functions as well, upper case hex chars, ...
  * Author: Richard James Howe */
 
@@ -38,8 +38,6 @@
 //#endif /* __cplusplus */
 //
 
-
-
 #define HEXY_PNUM_BUF_SIZE (64/*64 bit number in base 2*/ + 1/* for '+'/'-' */ + 1/*NUL terminator*/)
 
 #define HEXY_SEP_ADR ":\t"
@@ -56,26 +54,23 @@
 #define HEXY_MAX_NCOLS (64)
 #endif
 
-#ifndef HEXY_MIN
 #define HEXY_MIN(X, Y) ((X) < (Y) ? (X) : (Y))
-#endif
-
-#ifndef HEXY_MAX
 #define HEXY_MAX(X, Y) ((X) < (Y) ? (Y) : (X))
-#endif
+#define HEXY_NELEMS(X) (sizeof(X) / sizeof ((X)[0]))
 
-#ifndef HEXY_ELINE
-#define HEXY_ELINE (-__LINE__)
+#ifndef HEXY_ELINE /* This is used for returning a line dependent error code; a crude and simple way to debug */
+#define HEXY_ELINE (-__LINE__) 
 #endif
 
 typedef unsigned long hexy_unum_t;
 
-#define HEXY_UNUM_MAX (ULONG_MAX)
+#define HEXY_UNUM_MAX (ULONG_MAX) /* maximum value in `hexy_unum_t` */
 
 typedef struct {
-	unsigned char *b;
-	size_t used, length;
-} hexy_buffer_t;
+	uint8_t *b;    /* data buffer */
+	size_t used,   /* number of bytes used in `b` */
+	       length; /* length of `b` in bytes */
+} hexy_buffer_t; /* generic data buffer, used for I/O to/from a buffer */
 
 typedef int (*hexy_get_fn)(void *in);          /* callback for retrieving a byte, similar to `fgetc`. */
 typedef int (*hexy_put_fn)(void *out, int ch); /* callback for outputting a byte, similar to `fputc`. */
@@ -89,26 +84,41 @@ typedef struct {
 } hexy_io_t; /* I/O abstraction, use to redirect to wherever you want... */
 
 typedef struct {
-	hexy_io_t io;                    /* Hexdump I/O abstraction layer */
-	uint64_t address;           /* Address to print if enabled, auto-incremented */
-	size_t buf_used;            /* Number of bytes in buf used */
+	hexy_io_t io;                /* Hexdump I/O abstraction layer */
+	uint64_t address;            /* Address to print if enabled, auto-incremented */
+	size_t buf_used;             /* Number of bytes in buf used */
 	uint8_t buf[HEXY_MAX_NCOLS]; /* Buffer used to store characters for `chars_on` */
 
-        /* XXXX: XX XX XX XX |....| */
-	char *sep_adr,              /* */
-	     *sep_eol,              /* */
-	     *sep_byt,              /* */
-	     *sep_ch1,              /* */
-	     *sep_ch2;              /* */
+        /* Each line looks like this: "XXXX: XX XX XX XX |....|",
+	 * where "X" is a digit it is possible to change what is printed out at 
+	 * different points in the line. The macros "HEXY_SEP_*" contain the
+	 * default  */
+	char *sep_adr,               /* Separator for address and bytes */
+	     *sep_eol,               /* End of line separator, usually "\n" */
+	     *sep_byt,               /* Separator between each of the bytes */
+	     *sep_ch1,               /* Separator for area between end of bytes and start of character */
+	     *sep_ch2;               /* Separator for area between end of character printing and newline */
 
-	bool chars_off,             /* Turn off: character printing on, implies newlines_on */
-	     addresses_off,         /* Turn off: address printing, implies newlines_on */
-	     newlines_off;          /* Turn off: Print a new line, columnizing output */
+	bool init,                   /* Has this structure been initialized? */
+	     chars_off,              /* Turn off: character printing on, implies newlines are on */
+	     addresses_off,          /* Turn off: address printing, implies newlines are on */
+	     newlines_off,           /* Turn off: Print a new line, columnizing output */
+	     hex_uppercase_on;       /* If true: use upper case hex digits */
 
-	int base,                   /* Base to print, if 0 auto-select, otherwise valid bases are between 2 and 36 */
-	    abase,                  /* Base to print addresses in, if 0 used `base` */
-	    ncols;                  /* Number of columns to print, must not exceed HEXY_MAX_NCOLS, if 0 auto-select*/
+	int base,                    /* Base to print, if 0 auto-select, otherwise valid bases are between 2 and 36 */
+	    abase,                   /* Base to print addresses in, if 0 used `base` */
+	    ncols;                   /* Number of columns to print, must not exceed HEXY_MAX_NCOLS, if 0 auto-select*/
 } hexy_t; /* Hexdump structure, for all your hex-dumping needs */
+
+typedef struct {
+	char *arg;   /* parsed argument */
+	int index,   /* index into argument list */
+	    option,  /* parsed option */
+	    reset;   /* set to reset */
+	FILE *error; /* error stream to print to (set to NULL to turn off */
+	char *place; /* internal use: scanner position */
+	int  init;   /* internal use: initialized or not */
+} hexy_getopt_t;     /* getopt clone; with a few modifications */
 
 static const char *hexy_string_digits = "0123456789abcdefghijklmnopqrstuvwxyz";
 
@@ -125,15 +135,28 @@ static inline void hexy_reverse(char * const r, const size_t length) {
 	}
 }
 
+static inline int hexy_isgraph(const int ch) { /* avoiding the use of locale dependent functions */
+	return ch > 32 && ch < 127;
+}
+
+static inline int hexy_islower(const int ch) { 
+	return ch >= 97 && ch <= 122; 
+}
+
+static inline int hexy_toupper(const int ch) {
+	return hexy_islower(ch) ? ch ^ 0x20 : ch;
+}
+
 static int hexy_hexy_unum_to_string(char buf[static 64/*base 2*/ + 1/*'+'/'-'*/ + 1/*NUL*/], hexy_unum_t in, hexy_unum_t base) {
 	assert(buf);
 	size_t i = 0;
 	hexy_unum_t dv = in;
 	if (!hexy_is_valid_base(base))
 		return HEXY_ELINE;
-	do
-		buf[i++] = hexy_string_digits[dv % base];
-	while ((dv /= base));
+	do {
+		const int ch = hexy_string_digits[dv % base];
+		buf[i++] = /*h->hex_uppercase_on ? hexy_toupper(ch) : */ch;
+	} while ((dv /= base));
 	buf[i] = 0;
 	hexy_reverse(buf, i);
 	return 0;
@@ -196,17 +219,22 @@ static int hexy_puts(hexy_io_t *io, const char *s) {
 	return 0;
 }
 
-static int hexy_print_number(hexy_io_t *io, hexy_unum_t u, hexy_unum_t base, int leading_zeros, int leading_char) {
+static int hexy_print_number(hexy_io_t *io, hexy_unum_t u, hexy_unum_t base, int char_count, int char_to_repeat, bool left_align) {
 	assert(io);
-	for (int i = 0; i < leading_zeros; i++)
-		if (hexy_put(io, leading_char) < 0)
-			return HEXY_ELINE;
+	if (left_align)
+		for (int i = 0; i < char_count; i++)
+			if (hexy_put(io, char_to_repeat) < 0)
+				return HEXY_ELINE;
 	char buf[HEXY_PNUM_BUF_SIZE] = { 0, };
 	if (hexy_hexy_unum_to_string(buf, u, base) < 0)
 		return HEXY_ELINE;
 	for (size_t i = 0; i < HEXY_PNUM_BUF_SIZE && buf[i]; i++)
 		if (hexy_put(io, buf[i]) < 0)
 			return HEXY_ELINE;
+	if (!left_align)
+		for (int i = 0; i < char_count; i++)
+			if (hexy_put(io, char_to_repeat) < 0)
+				return HEXY_ELINE;
 	return 0;
 }
 
@@ -221,7 +249,7 @@ static int hexy_aligned_print_number(hexy_io_t *io, hexy_unum_t u, hexy_unum_t b
 	const int mint = hexy_uilog(max, base) - hexy_uilog(u, base);
 	leading_zeros = HEXY_MAX(0, leading_zeros);
 	leading_zeros = HEXY_MIN(mint, leading_zeros);
-	return hexy_print_number(io, u, base, leading_zeros, leading_char);
+	return hexy_print_number(io, u, base, leading_zeros, leading_char, true);
 }
 
 static bool hexy_newlines_enabled(hexy_t *h) {
@@ -258,11 +286,7 @@ static int hexy_spaces(hexy_t *h, int spaces) {
 	return 0;
 }
 
-static int hexy_isgraph(const int ch) { /* avoiding the use of locale dependent functions */
-	return ch > 32 && ch < 127;
-}
-
-static int hexy_pchar(hexy_t *h, int ch) {
+static int hexy_print_byte(hexy_t *h, int ch) {
 	assert(h);
 	ch = hexy_isgraph(ch) ? ch : HEXY_NON_GRAPHIC_REPLACEMENT_CHAR;
 	if (hexy_put(&h->io, ch) < 0)
@@ -274,7 +298,7 @@ static int hexy_paddr(hexy_t *h, hexy_unum_t addr) {
 	assert(h);
 	if (h->addresses_off)
 		return 0;
-	if (hexy_aligned_print_number(&h->io, addr, h->abase, HEXY_UNUM_MAX, 4, ' ') < 0)
+	if (hexy_aligned_print_number(&h->io, addr, h->abase, 65535, 4, ' ') < 0)
 		return HEXY_ELINE;
 	if (hexy_puts(&h->io, h->sep_adr) < 0)
 		return HEXY_ELINE;
@@ -305,6 +329,8 @@ static int hexy_config_default(hexy_t *h) {
 	h->sep_ch1 = h->sep_ch1 ? h->sep_ch1 : HEXY_SEP_CH1;
 	h->sep_ch2 = h->sep_ch2 ? h->sep_ch2 : HEXY_SEP_CH2 ;
 	h->sep_byt = h->sep_byt ? h->sep_byt : HEXY_SEP_BYT ;
+
+	h->init = true;
 
 	return hexy_validate(h);
 }
@@ -345,7 +371,7 @@ static int hexy(hexy_t *h) {
 			if (hexy_puts(io, h->sep_ch1) < 0)
 				return HEXY_ELINE;
 			for (size_t i = 0; i < h->buf_used; i++)
-				if (hexy_pchar(h, h->buf[i]) < 0)
+				if (hexy_print_byte(h, h->buf[i]) < 0)
 					return HEXY_ELINE;
 			if (hexy_spaces(h, missing) < 0)
 				return HEXY_ELINE;
@@ -367,16 +393,6 @@ fail:
 	io->error = -1;
 	return HEXY_ELINE;
 }
-
-typedef struct {
-	char *arg;   /* parsed argument */
-	int index,   /* index into argument list */
-	    option,  /* parsed option */
-	    reset;   /* set to reset */
-	FILE *error; /* error stream to print to (set to NULL to turn off */
-	char *place; /* internal use: scanner position */
-	int  init;   /* internal use: initialized or not */
-} hexy_getopt_t;     /* getopt clone; with a few modifications */
 
 /* Adapted from: <https://stackoverflow.com/questions/10404448>, this
  * could be extended to parse out numeric values, and do other things, but
@@ -449,7 +465,7 @@ static int hexy_getopt(hexy_getopt_t *opt, const int argc, char *const argv[], c
 
 #include <stdlib.h>
 
-static int help(FILE *out, const char *arg0) {
+static int hexy_help(FILE *out, const char *arg0) {
 	assert(out);
 	assert(arg0);
 	const char *fmt = "Usage: %s [-bBn #] [-h] files...\n\n\
@@ -464,55 +480,96 @@ Options:\n\n\
 \t-b #\tSet base for output, valid ranges are from 2 to 36.\n\
 \t-B #\tSet base for address printing, uses same base as byte output if not set.\n\
 \t-n #\tSet number of columns of values to print out.\n\
+\t-o k=v\tSet a number of key-value pair options.\n\
+\n\
+Options settable by `-o` flag:\n\n\
+ * `eol`=string:  Set end of line string\n\
+ * `adr`=string: Set string to print after address\n\
+ * `byt`=string: Set string to print in between bytes \n\
+ * `ch1`=string: Set string to print after bytes and before character view\n\
+ * `ch2`=string: Set string to print after character view and before newline \n\
+ * `chars-off`=bool: Turn character printing off\n\
+ * `address-off`=bool: Turn address printing off\n\
+ * `newlines-off`=bool: Turn newline printing off\n\
+ * `uppercase-hex-on`=bool: Turn on upper case printing of hex values\n\
 \n\
 This program returns zero on success and non-zero on failure.\n\n";
 	return fprintf(out, fmt, arg0);
 }
 
-#if 0
-static int hexyio(hexy_get_fn get, void *in, hexy_put_fn put, void *out) {
-	assert(get);
-	assert(put);
-	hexy_t h = { .io = { .get = get, .put = put, .in  = in, .out = out, }, };
-	return hexy(&h);
+static int hexy_flag(const char *v) {
+	assert(v);
+
+	static char *y[] = { "yes", "on", "true", };
+	static char *n[] = { "no",  "off", "false", };
+
+	for (size_t i = 0; i < HEXY_NELEMS(y); i++) {
+		if (!strcmp(y[i], v))
+			return 1;
+		if (!strcmp(n[i], v))
+			return 0;
+	}
+	return -1;
 }
 
-static int hexy_bb(const uint8_t *in, size_t inlen, uint8_t *out, size_t *outlen) {
-	assert(in);
-	assert(out);
-	assert(outlen);
-	hexy_buffer_t inb = { .b = (uint8_t*)in, .length = inlen, };
-	hexy_buffer_t outb = { .b = out, .length = *outlen, };
-	*outlen = 0;
-	const int r = hexyio(hexy_buffer_get, &inb, hexy_buffer_put, &outb);
-	if (r < 0)
-		return HEXY_ELINE;
-	*outlen = outb.used;
+/* More advanced key-value pairs could be dealt with if we had
+ * a table of key-values with the value type, default value
+ * and a pointer to the variable. This is currently not needed, 
+ * we only use `hexy_set_option` to set flags, but a data driven
+ * approach (whilst being slightly more complex) is more flexible. */
+static int hexy_set_option(hexy_t *h, char *kv) {
+	assert(h);
+	assert(kv);
+	char *k = kv, *v = NULL;
+	if ((v = strchr(kv, '=')) == NULL || *v == '\0')
+		return -1;
+	*v++ = '\0'; /* Assumes `kv` is writeable! */
+
+	if (!strcmp(k, "eol")) { h->sep_eol = v; return 0; }
+	if (!strcmp(k, "adr")) { h->sep_adr = v; return 0; }
+	if (!strcmp(k, "byt")) { h->sep_byt = v; return 0; }
+	if (!strcmp(k, "ch1")) { h->sep_ch1 = v; return 0; }
+	if (!strcmp(k, "ch2")) { h->sep_ch2 = v; return 0; }
+
+	const int r = hexy_flag(v);
+	if (r < 0) return -1;
+	assert(r == 0 || r == 1);
+	if (!strcmp(k, "chars-off"))             { h->chars_off = r; } 
+	else if (!strcmp(k, "address-off"))      { h->addresses_off = r; }
+	else if (!strcmp(k, "newlines-off"))     { h->newlines_off = r; }
+	else if (!strcmp(k, "uppercase-hex-on")) { h->hex_uppercase_on = r; }
+	else { return -2; }
 	return 0;
 }
-#endif
+
+static int hexy_sf(hexy_t *h, const char *in, FILE *out) {
+	assert(h);
+	assert(in);
+	assert(out);
+	hexy_buffer_t b = { .b = (unsigned char*)in, .length = strlen(in), };
+	hexy_io_t io = { .get = hexy_buffer_get, .put = hexy_file_put, .out = stdout, .in  = &b, };
+	h->io = io;
+	return hexy(h);
+}
 
 int main(int argc, char **argv) {
-	hexy_t h = {
-		.io = { 
-			.get = hexy_file_get, 
-			.put = hexy_file_put, 
-			.out = stdout, 
-			.in  = NULL, 
-		}, 
-	};
+	hexy_io_t io = { .get = hexy_file_get, .put = hexy_file_put, .out = stdout, .in  = NULL, };
+	hexy_t hexy_s = { .init = false, }, *h = &hexy_s;
 	hexy_getopt_t opt = { .error = stderr, };
 
-	for (int ch = 0; (ch = hexy_getopt(&opt, argc, argv, "hb:B:n:s:")) != -1;) {
+	for (int ch = 0; (ch = hexy_getopt(&opt, argc, argv, "hb:B:n:s:o:")) != -1;) {
 		switch (ch) {
-		case 'h': return help(stderr, argv[0]) < 0;
-		case 'b': h.base = atol(opt.arg); break; // TODO: Add to integer support to getopt, range check
-		case 'B': h.abase = atol(opt.arg); break; // TODO: Add to getopt, range check
-		case 'n': h.ncols = atol(opt.arg); break; // TODO: Auto scale number of cols based off of base if not explicitly set?
+		case 'h': return hexy_help(stderr, argv[0]) < 0;
+		case 'b': h->base = atol(opt.arg); break; // TODO: Add to integer support to getopt, range check
+		case 'B': h->abase = atol(opt.arg); break; // TODO: Add to getopt, range check
+		case 'n': h->ncols = atol(opt.arg); break; // TODO: Auto scale number of cols based off of base if not explicitly set?
+		case 'o': if (hexy_set_option(h, opt.arg) < 0) { (void)fprintf(stderr, "invalid `-o` option: %s\n", opt.arg); return 1; } break;
+		case 's': if (hexy_sf(h, opt.arg, stdout) < 0) return 1; break;
 		default: (void)fprintf(stderr, "Invalid option '%c', consult help (-h)\n", ch); return 1;
 		}
 	}
 
+	h->io = io; /* -s option sets I/O struct if used, it needs to be reset here. */
 	for (int i = opt.index; i < argc; i++) {
 		errno = 0;
 		FILE *f = fopen(argv[i], "rb");
@@ -520,8 +577,8 @@ int main(int argc, char **argv) {
 			(void)fprintf(stderr, "Cannot open file %s (mode %s): %s\n", argv[i], "rb", strerror(errno));
 			return 1;
 		}
-		h.io.in = f;
-		const int r = hexy(&h);
+		h->io.in = f;
+		const int r = hexy(h);
 		errno = 0;
 		if (fclose(f) < 0) {
 			(void)fprintf(stderr, "fclose failed: %s\n", strerror(errno));
