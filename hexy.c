@@ -14,29 +14,65 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include "hexy.h"
 
-//#ifndef HEXY_API
-//#define HEXY_API
-//#endif
-//
-//#ifndef HEXY_EXTERN
-//#define HEXY_EXTERN extern
-//#endif
+#ifndef HEXY_H
+#define HEXY_H
+
+#define HEXY_AUTHOR "Richard James Howe"
+#define HEXY_EMAIL "howe.r.j.89@gmail.com"
+#define HEXY_VERSION "v0.1"
+#define HEXY_REPO "https://github.com/howerj/hexy"
+#define HEXY_LICENSE "Public Domain / The Unlicense"
+
+#ifndef HEXY_API
+#define HEXY_API
+#endif
+
+#ifndef HEXY_EXTERN
+#define HEXY_EXTERN extern
+#endif
+
+#if 0
+static inline void hexy_reverse(char * const r, const size_t length);
+static inline int hexy_isgraph(const int ch);
+static inline int hexy_islower(const int ch);
+static inline int hexy_toupper(const int ch);
+static int hexy_unum_to_string(char buf[/*static HEXY_PNUM_BUF_SIZE*/], hexy_unum_t in, hexy_unum_t base);
+static int hexy_buffer_get(void *in);
+static int hexy_buffer_put(void *out, const int ch);
+static int hexy_file_get(void *in);
+static int hexy_file_put(void *out, int ch);
+static int hexy_get(hexy_io_t *io);
+static int hexy_put(hexy_io_t *io, const int ch);
+static int hexy_puts(hexy_io_t *io, const char *s);
+static int hexy_print_number(hexy_io_t *io, hexy_unum_t u, hexy_unum_t base, int char_count, int char_to_repeat, bool left_align);
+static int hexy_unsigned_integer_logarithm(hexy_unum_t n, hexy_unum_t base);
+static int hexy_getopt(hexy_getopt_t *opt, const int argc, char *const argv[], const char *fmt);
+static int hexy(hexy_t *h);
+static int hexy_convert(const char *n, int base, long *out);
+static int hexy_flag(const char *v);
+static int hexy_set_options(hexy_option_t *os, size_t olen, char *kv);
+#endif
+
+#endif
+
+
 //
 //#ifdef HEXY_IMPLEMENTATION
 //#ifdef HEXY_UNIT_TESTS
 //#ifdef HEXY_DEFINE_MAIN
 //
-//#ifdef __cplusplus
-//extern "C" {
-//#endif
-//
-//
-//#ifdef __cplusplus
-//}
-//#endif /* __cplusplus */
-//
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+
+#ifdef __cplusplus
+}
+#endif /* __cplusplus */
+
 
 #define HEXY_PNUM_BUF_SIZE (64/*64 bit number in base 2*/ + 1/* for '+'/'-' */ + 1/*NUL terminator*/)
 
@@ -112,15 +148,16 @@ typedef struct {
 
 typedef struct {
 	char *arg;   /* parsed argument */
+	long narg;   /* converted argument for '#' */
 	int index,   /* index into argument list */
 	    option,  /* parsed option */
 	    reset;   /* set to reset */
-	FILE *error; /* error stream to print to (set to NULL to turn off */
+	FILE *error, /* error stream to print to (set to NULL to turn off */
+	     *help;  /* if set, print out all options and return */
 	char *place; /* internal use: scanner position */
 	int  init;   /* internal use: initialized or not */
 } hexy_getopt_t;     /* getopt clone; with a few modifications */
 
-static const char *hexy_string_digits = "0123456789abcdefghijklmnopqrstuvwxyz";
 
 static bool hexy_is_valid_base(hexy_unum_t base) {
 	return base >=2 && base <= 36;
@@ -135,6 +172,9 @@ static inline void hexy_reverse(char * const r, const size_t length) {
 	}
 }
 
+/* Nested functions, even without solving the upwards or downward
+ * funarg problems and just banning references to variables in the
+ * containing scope, would be useful for these small functions. */
 static inline int hexy_isgraph(const int ch) { /* avoiding the use of locale dependent functions */
 	return ch > 32 && ch < 127;
 }
@@ -147,13 +187,14 @@ static inline int hexy_toupper(const int ch) {
 	return hexy_islower(ch) ? ch ^ 0x20 : ch;
 }
 
-static int hexy_hexy_unum_to_string(char buf[static 64/*base 2*/ + 1/*'+'/'-'*/ + 1/*NUL*/], hexy_unum_t in, hexy_unum_t base) {
+static int hexy_unum_to_string(char buf[/*static HEXY_PNUM_BUF_SIZE*/], hexy_unum_t in, hexy_unum_t base) {
 	assert(buf);
 	size_t i = 0;
 	hexy_unum_t dv = in;
 	if (!hexy_is_valid_base(base))
 		return HEXY_ELINE;
 	do {
+		static const char *hexy_string_digits = "0123456789abcdefghijklmnopqrstuvwxyz";
 		const int ch = hexy_string_digits[dv % base];
 		buf[i++] = /*h->hex_uppercase_on ? hexy_toupper(ch) : */ch;
 	} while ((dv /= base));
@@ -161,6 +202,7 @@ static int hexy_hexy_unum_to_string(char buf[static 64/*base 2*/ + 1/*'+'/'-'*/ 
 	hexy_reverse(buf, i);
 	return 0;
 }
+
 
 static int hexy_buffer_get(void *in) {
 	hexy_buffer_t *b = in;
@@ -226,7 +268,7 @@ static int hexy_print_number(hexy_io_t *io, hexy_unum_t u, hexy_unum_t base, int
 			if (hexy_put(io, char_to_repeat) < 0)
 				return HEXY_ELINE;
 	char buf[HEXY_PNUM_BUF_SIZE] = { 0, };
-	if (hexy_hexy_unum_to_string(buf, u, base) < 0)
+	if (hexy_unum_to_string(buf, u, base) < 0)
 		return HEXY_ELINE;
 	for (size_t i = 0; i < HEXY_PNUM_BUF_SIZE && buf[i]; i++)
 		if (hexy_put(io, buf[i]) < 0)
@@ -238,15 +280,17 @@ static int hexy_print_number(hexy_io_t *io, hexy_unum_t u, hexy_unum_t base, int
 	return 0;
 }
 
-static int hexy_uilog(hexy_unum_t n, hexy_unum_t base) {
+static int hexy_unsigned_integer_logarithm(hexy_unum_t n, hexy_unum_t base) {
 	int r = 0;
 	do r++; while ((n /= base));
 	return r;
 }
 
+
+
 static int hexy_aligned_print_number(hexy_io_t *io, hexy_unum_t u, hexy_unum_t base, hexy_unum_t max, int leading_zeros, int leading_char) {
 	assert(io);
-	const int mint = hexy_uilog(max, base) - hexy_uilog(u, base);
+	const int mint = hexy_unsigned_integer_logarithm(max, base) - hexy_unsigned_integer_logarithm(u, base);
 	leading_zeros = HEXY_MAX(0, leading_zeros);
 	leading_zeros = HEXY_MIN(mint, leading_zeros);
 	return hexy_print_number(io, u, base, leading_zeros, leading_char, true);
@@ -341,7 +385,7 @@ static int hexy(hexy_t *h) {
 	if (hexy_config_default(h) < 0)
 		return HEXY_ELINE;
 
-	const int byte_align = hexy_uilog(255, h->base);
+	const int byte_align = hexy_unsigned_integer_logarithm(255, h->base);
 
 	for (int end = 0; !end;) {
 		h->buf_used = 0;
@@ -394,18 +438,146 @@ fail:
 	return HEXY_ELINE;
 }
 
+static int hexy_flag(const char *v) {
+	assert(v);
+
+	static char *y[] = { "yes", "on", "true", };
+	static char *n[] = { "no",  "off", "false", };
+
+	for (size_t i = 0; i < HEXY_NELEMS(y); i++) {
+		if (!strcmp(y[i], v))
+			return 1;
+		if (!strcmp(n[i], v))
+			return 0;
+	}
+	return -1;
+}
+
+/* More advanced key-value pairs could be dealt with if we had
+ * a table of key-values with the value type, default value
+ * and a pointer to the variable. This is currently not needed, 
+ * we only use `hexy_set_option` to set flags, but a data driven
+ * approach (whilst being slightly more complex) is more flexible. 
+ *
+ * TODO: Make this more generic, it should accept an array
+ * of options. 
+ *
+ * 	typedef struct { char *opt; union { bool *f; long *n; char *s; } v; } hexy_option_t;
+ *
+ */
+static int hexy_set_option(hexy_t *h, char *kv) {
+	assert(h);
+	assert(kv);
+	char *k = kv, *v = NULL;
+	if ((v = strchr(kv, '=')) == NULL || *v == '\0')
+		return -1;
+	*v++ = '\0'; /* Assumes `kv` is writeable! */
+
+	if (!strcmp(k, "eol")) { h->sep_eol = v; return 0; }
+	if (!strcmp(k, "adr")) { h->sep_adr = v; return 0; }
+	if (!strcmp(k, "byt")) { h->sep_byt = v; return 0; }
+	if (!strcmp(k, "ch1")) { h->sep_ch1 = v; return 0; }
+	if (!strcmp(k, "ch2")) { h->sep_ch2 = v; return 0; }
+
+	const int r = hexy_flag(v);
+	if (r < 0) return -1;
+	assert(r == 0 || r == 1);
+	if (!strcmp(k, "chars-off"))             { h->chars_off = r; } 
+	else if (!strcmp(k, "address-off"))      { h->addresses_off = r; }
+	else if (!strcmp(k, "newlines-off"))     { h->newlines_off = r; }
+	else if (!strcmp(k, "uppercase-hex-on")) { h->hex_uppercase_on = r; }
+	else { return -2; }
+	return 0;
+}
+
+static int hexy_convert(const char *n, int base, long *out) {
+	assert(n);
+	assert(out);
+	*out = 0;
+	char *endptr = NULL;
+	errno = 0;
+	const long r = strtol(n, &endptr, base);
+	if (*endptr)
+		return -1;
+	if (errno == ERANGE)
+		return -1;
+	*out = r;
+	return 0;
+}
+
+enum {
+	HEXY_OPTION_BOOL_E,
+	HEXY_OPTION_LONG_E,
+	HEXY_OPTION_STRING_E,
+};
+
+typedef struct {
+	char *opt;
+	int type;
+	union { bool *f; long *n; char *s; } v;
+} hexy_option_t;
+
+static int hexy_set_options(hexy_option_t *os, size_t olen, char *kv) {
+	assert(os);
+	char *k = kv, *v = NULL;
+	if ((v = strchr(kv, '=')) == NULL || *v == '\0')
+		return -1;
+	*v++ = '\0'; /* Assumes `kv` is writeable! */
+
+	hexy_option_t *o = NULL;
+	for (size_t i = 0; i < olen; i++) {
+		hexy_option_t *p = &os[i];
+		if (!strcmp(p->opt, k)) { o = p; break; }
+	}
+	if (!o)
+		return -1;
+
+	switch (o->type) {
+	case HEXY_OPTION_BOOL_E: {
+		const int r = hexy_flag(v);
+		assert(r == 0 || r == 1 || r == -1);
+		if (r < 0)
+			return -1;
+		*o->v.f = !!r;
+		break;
+	}
+	case HEXY_OPTION_LONG_E: { return hexy_convert(v, 0, o->v.n); break; }
+	case HEXY_OPTION_STRING_E: { o->v.s = v; /* Assumes `kv` is persistent! */ break; }
+	default: return -1;
+	}
+	
+	return 0;
+}
+
 /* Adapted from: <https://stackoverflow.com/questions/10404448>, this
  * could be extended to parse out numeric values, and do other things, but
  * that is not needed here. The function and structure should be turned
  * into a header only library.
  *
  * TODO: Handle number parsing (signed/unsigned).
- * TODO: Print out minimal help from string */
+ * TODO: Turn into variadic function, set options directly? */
 static int hexy_getopt(hexy_getopt_t *opt, const int argc, char *const argv[], const char *fmt) {
 	assert(opt);
 	assert(fmt);
 	assert(argv);
-	enum { BADARG_E = ':', BADCH_E = '?', BADIO_E = '!', };
+	enum { BADARG_E = ':', BADCH_E = '?', BADIO_E = '!', BADNUM_E = '#', OPTEND_E = -1, };
+
+#define HEXY_GETOPT_NEEDS_ARG(X) ((X) == ':' || (X) == '#')
+
+	if (opt->help) {
+		for (int ch = 0; (ch = *fmt++);) {
+			if (fprintf(opt->help, "\t-%c ", ch) < 0)
+				return BADIO_E; 
+			if (HEXY_GETOPT_NEEDS_ARG(*fmt)) {
+				if (fprintf(opt->help, "%s", *fmt == ':' ? "<string>" : "<number>") < 0)
+					return BADIO_E;
+				fmt++;
+			}
+			if (fputs("\n", opt->help) < 0)
+				return BADIO_E;
+		}
+		return OPTEND_E;
+	}
 
 	if (!(opt->init)) {
 		opt->place = ""; /* option letter processing */
@@ -417,38 +589,43 @@ static int hexy_getopt(hexy_getopt_t *opt, const int argc, char *const argv[], c
 		opt->reset = 0;
 		if (opt->index >= argc || *(opt->place = argv[opt->index]) != '-') {
 			opt->place = "";
-			return -1;
+			return OPTEND_E;
 		}
 		if (opt->place[1] && *++opt->place == '-') { /* found "--" */
 			opt->index++;
 			opt->place = "";
-			return -1;
+			return OPTEND_E;
 		}
 	}
 
 	const char *oli = NULL; /* option letter list index */
-	if ((opt->option = *opt->place++) == ':' || !(oli = strchr(fmt, opt->option))) { /* option letter okay? */
+	opt->option = *opt->place++;
+	if (HEXY_GETOPT_NEEDS_ARG(opt->option) || !(oli = strchr(fmt, opt->option))) { /* option letter okay? */
 		 /* if the user didn't specify '-' as an option, assume it means -1.  */
 		if (opt->option == '-')
-			return -1;
+			return OPTEND_E;
 		if (!*opt->place)
 			opt->index++;
-		if (opt->error && *fmt != ':')
+		if (opt->error && !HEXY_GETOPT_NEEDS_ARG(*fmt))
 			if (fprintf(opt->error, "illegal option -- %c\n", opt->option) < 0)
 				return BADIO_E;
 		return BADCH_E;
 	}
 
-	if (*++oli != ':') { /* don't need argument */
+	const int o = *++oli;
+	if (!HEXY_GETOPT_NEEDS_ARG(o)) {
 		opt->arg = NULL;
 		if (!*opt->place)
 			opt->index++;
 	} else {  /* need an argument */
 		if (*opt->place) { /* no white space */
 			opt->arg = opt->place;
+			if (o == '#')
+				if (hexy_convert(opt->arg, 0, &opt->narg) < 0)
+					return BADNUM_E;
 		} else if (argc <= ++opt->index) { /* no arg */
 			opt->place = "";
-			if (*fmt == ':')
+			if (HEXY_GETOPT_NEEDS_ARG(*fmt))
 				return BADARG_E;
 			if (opt->error)
 				if (fprintf(opt->error, "option requires an argument -- %c\n", opt->option) < 0)
@@ -456,14 +633,16 @@ static int hexy_getopt(hexy_getopt_t *opt, const int argc, char *const argv[], c
 			return BADCH_E;
 		} else	{ /* white space */
 			opt->arg = argv[opt->index];
+			if (o == '#')
+				if (hexy_convert(opt->arg, 0, &opt->narg) < 0)
+					return BADNUM_E;
 		}
 		opt->place = "";
 		opt->index++;
 	}
+#undef HEXY_GETOPT_NEEDS_ARG
 	return opt->option; /* dump back option letter */
 }
-
-#include <stdlib.h>
 
 static int hexy_help(FILE *out, const char *arg0) {
 	assert(out);
@@ -497,51 +676,6 @@ This program returns zero on success and non-zero on failure.\n\n";
 	return fprintf(out, fmt, arg0);
 }
 
-static int hexy_flag(const char *v) {
-	assert(v);
-
-	static char *y[] = { "yes", "on", "true", };
-	static char *n[] = { "no",  "off", "false", };
-
-	for (size_t i = 0; i < HEXY_NELEMS(y); i++) {
-		if (!strcmp(y[i], v))
-			return 1;
-		if (!strcmp(n[i], v))
-			return 0;
-	}
-	return -1;
-}
-
-/* More advanced key-value pairs could be dealt with if we had
- * a table of key-values with the value type, default value
- * and a pointer to the variable. This is currently not needed, 
- * we only use `hexy_set_option` to set flags, but a data driven
- * approach (whilst being slightly more complex) is more flexible. */
-static int hexy_set_option(hexy_t *h, char *kv) {
-	assert(h);
-	assert(kv);
-	char *k = kv, *v = NULL;
-	if ((v = strchr(kv, '=')) == NULL || *v == '\0')
-		return -1;
-	*v++ = '\0'; /* Assumes `kv` is writeable! */
-
-	if (!strcmp(k, "eol")) { h->sep_eol = v; return 0; }
-	if (!strcmp(k, "adr")) { h->sep_adr = v; return 0; }
-	if (!strcmp(k, "byt")) { h->sep_byt = v; return 0; }
-	if (!strcmp(k, "ch1")) { h->sep_ch1 = v; return 0; }
-	if (!strcmp(k, "ch2")) { h->sep_ch2 = v; return 0; }
-
-	const int r = hexy_flag(v);
-	if (r < 0) return -1;
-	assert(r == 0 || r == 1);
-	if (!strcmp(k, "chars-off"))             { h->chars_off = r; } 
-	else if (!strcmp(k, "address-off"))      { h->addresses_off = r; }
-	else if (!strcmp(k, "newlines-off"))     { h->newlines_off = r; }
-	else if (!strcmp(k, "uppercase-hex-on")) { h->hex_uppercase_on = r; }
-	else { return -2; }
-	return 0;
-}
-
 static int hexy_sf(hexy_t *h, const char *in, FILE *out) {
 	assert(h);
 	assert(in);
@@ -557,12 +691,12 @@ int main(int argc, char **argv) {
 	hexy_t hexy_s = { .init = false, }, *h = &hexy_s;
 	hexy_getopt_t opt = { .error = stderr, };
 
-	for (int ch = 0; (ch = hexy_getopt(&opt, argc, argv, "hb:B:n:s:o:")) != -1;) {
+	for (int ch = 0; (ch = hexy_getopt(&opt, argc, argv, "hb#B#n#s:o:")) != -1;) {
 		switch (ch) {
 		case 'h': return hexy_help(stderr, argv[0]) < 0;
-		case 'b': h->base = atol(opt.arg); break; // TODO: Add to integer support to getopt, range check
-		case 'B': h->abase = atol(opt.arg); break; // TODO: Add to getopt, range check
-		case 'n': h->ncols = atol(opt.arg); break; // TODO: Auto scale number of cols based off of base if not explicitly set?
+		case 'b': h->base = opt.narg; break;
+		case 'B': h->abase = opt.narg; break;
+		case 'n': h->ncols = opt.narg; break;
 		case 'o': if (hexy_set_option(h, opt.arg) < 0) { (void)fprintf(stderr, "invalid `-o` option: %s\n", opt.arg); return 1; } break;
 		case 's': if (hexy_sf(h, opt.arg, stdout) < 0) return 1; break;
 		default: (void)fprintf(stderr, "Invalid option '%c', consult help (-h)\n", ch); return 1;
@@ -591,4 +725,5 @@ int main(int argc, char **argv) {
 	}
 	return 0;
 }
+
 

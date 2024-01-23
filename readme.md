@@ -7,3 +7,7 @@
 
 A set of highly portable routines for performing a customizable hex-dump, useful
 when debugging in embedded contexts using routines to print to a UART for instance.
+
+The library also contains a grab-bag of useful routines and macros that are
+used to support the hex-dump routines and command line parsing.
+
