@@ -1,4 +1,4 @@
-CFLAGS=-std=c99 -Wall -Wextra -pedantic -O2
+CFLAGS=-std=c99 -Wall -Wextra -pedantic -O2 -Wmissing-prototypes
 CXXFLAGS=-Wall -Wextra -pedantic -O2
 #
 #default all: cpp c
@@ -30,6 +30,10 @@ ${TARGET}: c.c ${TARGET}.h makefile
 
 cpp: cpp.cpp ${TARGET}.h makefile
 	${CXX} ${CXXFLAGS} $< -o $@
+
+
+${TARGET}.o: hexy.c hexy.h makefile
+	${CC} ${CFLAGS} -DHEXY_IMPLEMENTATION $< -c -o $@
 
 clean:
 	git clean -dffx
