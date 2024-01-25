@@ -1,12 +1,3 @@
-/* Project: Generic Hexdump routines
- * Missing: Grouping bytes and endianess conversion,
- * signed printing, header-only library, unit tests, 
- * colors, undump, optional FILE* support, escape character support,
- * C++ integration, overflow checks, BUILD_BUG_ON,
- * more assertions, help section and explain this
- * library, clean up HEXY_API usage, ...
- * Author: Richard James Howe */
-
 #ifndef HEXY_H
 #define HEXY_H
 
@@ -25,9 +16,104 @@ extern "C" {
 
 #define HEXY_AUTHOR  "Richard James Howe"
 #define HEXY_EMAIL   "howe.r.j.89@gmail.com"
-#define HEXY_VERSION "v0.1"
+#define HEXY_VERSION "v0.2"
 #define HEXY_REPO    "https://github.com/howerj/hexy"
 #define HEXY_LICENSE "Public Domain / The Unlicense"
+
+/* This project contains a set of routines for printing out arrays of
+ * bytes as a hexdump with an optional character view and address
+ * output, as well as a customizable output base. There are also routines
+ * that are used to implement a command line utility that utilizes this
+ * library and an optional "main()" definition. The library contains more
+ * functions than are strictly needed as it has been used as a test-bed
+ * for those functions.
+ *
+ * The project is in the form of a header-only library (see
+ * <https://en.wikipedia.org/wiki/Header-only>, and
+ * <https://stackoverflow.com/questions/12671383>). Also see
+ * <https://github.com/howerj/localely> for another example of a header
+ * only library.
+ *
+ * It is easy to port this library to new platforms, even micro-controllers,
+ * which may lack access to standard input and output. This is achieved via
+ * a few callbacks that abstract I/O out.
+ *
+ * To use this library the following macros can be defined depending on
+ * how you want to use it. They are:
+ *
+ * - `HEXY_API`: Applied to the function definitions.
+ * - `HEXY_EXTERN`: Applied to the function declarations.
+ * - `HEXY_IMPLEMENTATION`: If defined the definitions and not
+ *   just the declarations of functions are made.
+ * - `HEXY_DEFINE_MAIN`: If defined the example "main()" function is
+ *   defined, which can be used to test the library out.
+ * - `HEXY_UNIT_TESTS`: If defined then the unit tests are compiled
+ *   in, otherwise the unit test function will be part of the API, it
+ *   will just always return success.
+ *
+ * There are other macros defined however they are used for options to
+ * control the behavior of the library and are not used to control how
+ * the library is built, it is possible to make all the exported functions
+ * `static inline` or `extern` with the right incantations.
+ *
+ * This library makes heavy use of asserts to ensure correctness,
+ * to turn these off use `NDEBUG` as usual.
+ *
+ * Some example scenarios might help to illustrate the use of
+ * this library, imagine two files, this header file (`hexy.h`)
+ * and a test file `test.c`.
+ *
+ * If `test.c` contains:
+ *
+ * 	#define HEXY_IMPLEMENTATION
+ * 	#define HEXY_DEFINE_MAIN
+ * 	#define HEXY_EXTERN static inline
+ * 	#define HEXY_API HEXY_EXTERN
+ * 	#include "hexy.h"
+ *
+ * Then we can compile the program and run the program like so:
+ *
+ * 	cc test.c -o test
+ * 	./test file.bin
+ *
+ * All functions that would usually be exported are defined as
+ * being `static inline` which means that any functions not used
+ * are optimized out, and more optimizations can be done by the
+ * compiler (for example more aggressive and accurate dead code
+ * elimination).
+ *
+ * If you would like to use the hex routines as a library because
+ * they are used in multiple places throughout your larger program
+ * and project then we use the following definitions in `test.c`:
+ *
+ *	#define HEXY_IMPLEMENTATION
+ *	#include "hexy.h"
+ *
+ * And compile like so:
+ *
+ *	cc test.c -c -o hexy.o
+ *	ar rcs libhexy.a hexy.o
+ *	
+ * Which you can link against normally, and so something similar
+ * to produce a dynamic library (either an ".so" or a ".dll" file).
+ *
+ * You can also include this library multiple times within the same
+ * program by defining the following prior to including `hexy.h`.
+ *
+ *	#define HEXY_API static inline
+ *	#define HEXY_EXTERN HEXY_API
+ *	#include "hexy.h"
+ *
+ * This is useful for temporarily including these functions for
+ * debugging purposes. "main()" will not be defined.
+ *
+ *
+ * TODO: signed printing, unit tests, colors, undump, 
+ * optional FILE* support, escape character support,
+ * C++ integration, overflow checks, BUILD_BUG_ON,
+ * more assertions, help section and explain this
+ * library, ...
+ */
 
 #ifndef HEXY_API
 #define HEXY_API
@@ -103,7 +189,7 @@ typedef struct {
 	hexy_io_t io;                /* Hexdump I/O abstraction layer */
 	uint64_t address;            /* Address to print if enabled, auto-incremented */
 	size_t buf_used;             /* Number of bytes in buf used */
-	uint8_t buf[HEXY_MAX_NCOLS /* * HEXY_MAX_GROUP */]; /* Buffer used to store characters for `chars_on` */
+	uint8_t buf[HEXY_MAX_NCOLS * HEXY_MAX_GROUP]; /* Buffer used to store characters for `chars_on` / data */
 
         /* Each line looks like this: "XXXX: XX XX XX XX |....|",
 	 * where "X" is a digit it is possible to change what is printed out at 
@@ -177,7 +263,6 @@ HEXY_EXTERN int hexy_file_put(void *out, int ch);
 HEXY_EXTERN int hexy_get(hexy_io_t *io);
 HEXY_EXTERN int hexy_put(hexy_io_t *io, const int ch);
 HEXY_EXTERN int hexy_puts(hexy_io_t *io, const char *s);
-HEXY_EXTERN int hexy_print_number(hexy_io_t *io, hexy_unum_t u, hexy_unum_t base, int char_count, int char_to_repeat, bool left_align, bool upper);
 HEXY_EXTERN int hexy_unsigned_integer_logarithm(hexy_unum_t n, hexy_unum_t base);
 HEXY_EXTERN int hexy(hexy_t *h);
 HEXY_EXTERN int hexy_convert(const char *n, int base, long *out);
@@ -188,9 +273,7 @@ HEXY_EXTERN int hexy_getopt(hexy_getopt_t *opt, const int argc, char *const argv
 HEXY_EXTERN int hexy_options_set(hexy_options_t *os, size_t olen, char *kv, FILE *error);
 HEXY_EXTERN int hexy_options_help(hexy_options_t *os, size_t olen, FILE *out);
 
-#ifdef HEXY_UNIT_TESTS
 HEXY_EXTERN int hexy_unit_tests(void);
-#endif
 
 #ifdef __cplusplus
 }
@@ -315,7 +398,68 @@ HEXY_API int hexy_puts(hexy_io_t *io, const char *s) {
 	return 0;
 }
 
-HEXY_API int hexy_print_number(hexy_io_t *io, hexy_unum_t u, hexy_unum_t base, int char_count, int char_to_repeat, bool left_align, bool upper) {
+HEXY_INTERNAL int hexy_hex_char_to_nibble(int c) {
+	c = hexy_tolower(c);
+	if ('a' <= c && c <= 'f')
+		return 0xa + c - 'a';
+	return c - '0';
+}
+
+/* converts up to two characters and returns number of characters converted */
+HEXY_INTERNAL int hexy_hex_str_to_int(const char *str, int *const val) {
+	assert(str);
+	assert(val);
+	*val = 0;
+	if (!hexy_isxdigit(*str))
+		return 0;
+	*val = hexy_hex_char_to_nibble(*str++);
+	if (!hexy_isxdigit(*str))
+		return 1;
+	*val = (*val << 4) + hexy_hex_char_to_nibble(*str);
+	return 2;
+}
+
+HEXY_API int hexy_unescape(char *r, size_t length) { /* N.B. In place un-escaping! */
+	assert(r);
+	if (!length)
+		return -1;
+	size_t k = 0;
+	for (size_t j = 0, ch = 0; (ch = r[j]) && k < length; j++, k++) {
+		if (ch == '\\') {
+			j++;
+			switch (r[j]) {
+			case '\0': return -1;
+			case '\n': k--;         break; /* multi-line hack (Unix line-endings only) */
+			case '\\': r[k] = '\\'; break;
+			case  'a': r[k] = '\a'; break;
+			case  'b': r[k] = '\b'; break;
+			case  'e': r[k] = 27;   break;
+			case  'f': r[k] = '\f'; break;
+			case  'n': r[k] = '\n'; break;
+			case  'r': r[k] = '\r'; break;
+			case  't': r[k] = '\t'; break;
+			case  'v': r[k] = '\v'; break;
+			case  'x': {
+				int val = 0;
+				const int pos = hexy_hex_str_to_int(&r[j + 1], &val);
+				if (pos < 1)
+					return -2;
+				j += pos;
+				r[k] = val;
+				break;
+			}
+			default:
+				r[k] = r[j]; break;
+			}
+		} else {
+			r[k] = ch;
+		}
+	}
+	r[k] = '\0';
+	return k;
+}
+
+HEXY_INTERNAL int hexy_print_number(hexy_io_t *io, hexy_unum_t u, hexy_unum_t base, int char_count, int char_to_repeat, bool left_align, bool upper) {
 	assert(io);
 	if (left_align)
 		for (int i = 0; i < char_count; i++)
@@ -403,6 +547,10 @@ HEXY_INTERNAL int hexy_print_address(hexy_t *h, hexy_unum_t addr) {
 
 HEXY_INTERNAL int hexy_validate(hexy_t *h) {
 	assert(h);
+	HEXY_BUILD_BUG_ON(HEXY_MAX_GROUP < 1);
+	HEXY_BUILD_BUG_ON(HEXY_MAX_NCOLS < 1);
+	HEXY_BUILD_BUG_ON(HEXY_PNUM_BUF_SIZE < 66);
+
 	if (h->io.error)
 		return HEXY_ELINE;
 	if (!hexy_is_valid_base(h->base))
@@ -418,6 +566,9 @@ HEXY_INTERNAL int hexy_validate(hexy_t *h) {
 
 HEXY_INTERNAL int hexy_config_default(hexy_t *h) {
 	assert(h);
+	if (h->init)
+		return hexy_validate(h);
+
 	h->base  = h->base  ? h->base  : 16 ;
 	h->ncols = h->ncols ? h->ncols : 16 ;
 	h->abase = h->abase ? h->abase : h->base;
@@ -428,11 +579,26 @@ HEXY_INTERNAL int hexy_config_default(hexy_t *h) {
 	h->sep_ch2 = h->sep_ch2 ? h->sep_ch2 : HEXY_SEP_CH2 ;
 	h->sep_byt = h->sep_byt ? h->sep_byt : HEXY_SEP_BYT ;
 
-	h->init = true;
-
 	h->group = h->group ? h->group : 1;
 
-	return hexy_validate(h);
+	/* // This requires the separator strings to be modifiable, the default strings are not.
+	if (hexy_unescape(h->sep_adr, strlen(h->sep_adr) + 1) < 0)
+		return -1;
+	if (hexy_unescape(h->sep_byt, strlen(h->sep_byt) + 1) < 0)
+		return -1;
+	if (hexy_unescape(h->sep_ch1, strlen(h->sep_ch1) + 1) < 0)
+		return -1;
+	if (hexy_unescape(h->sep_ch2, strlen(h->sep_ch2) + 1) < 0)
+		return -1;
+	if (hexy_unescape(h->sep_eol, strlen(h->sep_eol) + 1) < 0)
+		return -1;*/
+
+	if (hexy_validate(h) < 0)
+		return -1;
+
+	h->init = true;
+
+	return 0;
 }
 
 HEXY_API int hexy(hexy_t *h) {
@@ -442,10 +608,12 @@ HEXY_API int hexy(hexy_t *h) {
 		return HEXY_ELINE;
 
 	const int byte_align = hexy_unsigned_integer_logarithm(255, h->base);
+	const int length = h->ncols * h->group;
+	assert(length > 0 && length >= h->ncols);
 
-	for (int end = 0; !end;) { /* TODO: Implement grouping and reversing groups */
+	for (int end = 0; !end;) {
 		h->buf_used = 0;
-		for (int i = 0; i < h->ncols; i++) {
+		for (int i = 0; i < length; i++) {
 			const int ch = hexy_get(io);
 			if (ch < 0)
 				end = 1;
@@ -453,21 +621,50 @@ HEXY_API int hexy(hexy_t *h) {
 				goto done;
 			if (end)
 				break;
+			assert(h->buf_used < sizeof(h->buf));
 			h->buf[h->buf_used++] = ch;
 		}
 		if (hexy_print_address(h, h->address) < 0)
 			return HEXY_ELINE;
-		for (size_t i = 0; i < h->buf_used; i++) {
-			if (hexy_aligned_print_number(io, h->buf[i], h->base, 255, byte_align, '0', h->uppercase_on) < 0)
-				return HEXY_ELINE;
+		if (h->rev_grp_on) { /* XYZ -> ZYX */
+			/* There is a special case when reversing groups of
+			 * bytes if the last group is incomplete (e.g. we are
+			 * asked to reverse groups of four bytes but a multiple
+			 * of four bytes is not provided).
+			 *
+			 * Currently we do not reverse the last group.
+			 *
+			 * We could optionally reverse last and zero fill missing bytes,
+			 * alternatively an error could be returned, or the
+			 * remaining bytes in the group could be reversed as a
+			 * smaller unit. */
+			const int limit = h->buf_used / h->group; /* skip reversing last group of not evenly divisible */
+			for (int i = 0; i < limit; i++) {
+				const size_t idx = i * h->group;
+				assert(idx < sizeof (h->buf));
+				hexy_reverse((char*)&h->buf[idx], h->group);
+			}
+		}
+
+		for (size_t i = 0; i < (size_t)h->ncols; i++) {
+			for (size_t j = 0; j < (size_t)h->group; j++) {
+				const size_t idx = (i * h->group) + j;
+				assert(idx < sizeof(h->buf));
+				if (idx >= h->buf_used)
+					break;
+				if (hexy_aligned_print_number(io, h->buf[idx], h->base, 255, byte_align, '0', h->uppercase_on) < 0)
+					return HEXY_ELINE;
+			}
 			if (hexy_puts(io, h->sep_byt) < 0)
 				return HEXY_ELINE;
 		}
+
 		if (!h->chars_off) {
-			const int missing = h->ncols - h->buf_used;
-			const int bseplen = strlen(h->sep_byt);
+			const int elements = h->ncols * h->group;
+			const int missing = elements - h->buf_used;
 			assert(missing >= 0);
-			if (hexy_spaces(h, (byte_align + bseplen) * missing) < 0)
+			assert(missing < 1024);
+			if (hexy_spaces(h, byte_align * missing) < 0)
 				return HEXY_ELINE;
 			if (hexy_puts(io, h->sep_ch1) < 0)
 				return HEXY_ELINE;
@@ -712,77 +909,27 @@ HEXY_API int hexy_getopt(hexy_getopt_t *opt, const int argc, char *const argv[],
 	return opt->option; /* dump back option letter */
 }
 
-HEXY_INTERNAL int hexy_hex_char_to_nibble(int c) {
-	c = hexy_tolower(c);
-	if ('a' <= c && c <= 'f')
-		return 0xa + c - 'a';
-	return c - '0';
-}
-
-/* converts up to two characters and returns number of characters converted */
-HEXY_INTERNAL int hexy_hex_str_to_int(const char *str, int *const val) {
-	assert(str);
-	assert(val);
-	*val = 0;
-	if (!hexy_isxdigit(*str))
-		return 0;
-	*val = hexy_hex_char_to_nibble(*str++);
-	if (!hexy_isxdigit(*str))
-		return 1;
-	*val = (*val << 4) + hexy_hex_char_to_nibble(*str);
-	return 2;
-}
-
-HEXY_API int hexy_unescape(char *r, size_t length) { /* N.B. In place un-escaping! */
-	assert(r);
-	if (!length)
-		return -1;
-	size_t k = 0;
-	for (size_t j = 0, ch = 0; (ch = r[j]) && k < length; j++, k++) {
-		if (ch == '\\') {
-			j++;
-			switch (r[j]) {
-			case '\0': return -1;
-			case '\n': k--;         break; /* multi-line hack (Unix line-endings only) */
-			case '\\': r[k] = '\\'; break;
-			case  'a': r[k] = '\a'; break;
-			case  'b': r[k] = '\b'; break;
-			case  'e': r[k] = 27;   break;
-			case  'f': r[k] = '\f'; break;
-			case  'n': r[k] = '\n'; break;
-			case  'r': r[k] = '\r'; break;
-			case  't': r[k] = '\t'; break;
-			case  'v': r[k] = '\v'; break;
-			case  'x': {
-				int val = 0;
-				const int pos = hexy_hex_str_to_int(&r[j + 1], &val);
-				if (pos < 1)
-					return -2;
-				j += pos;
-				r[k] = val;
-				break;
-			}
-			default:
-				r[k] = r[j]; break;
-			}
-		} else {
-			r[k] = ch;
-		}
-	}
-	r[k] = '\0';
-	return k;
-}
-
 #ifdef HEXY_DEFINE_MAIN
 #define HEXY_UNIT_TESTS
 #endif
 
 #ifdef HEXY_UNIT_TESTS
-HEXY_EXTERN int hexy_unit_tests(void) {
+HEXY_API int hexy_unit_tests(void) {
+	for (size_t i = 0; i < 256; i++) {
+		if (hexy_isupper(hexy_tolower(i)))
+			return -1;
+		if (hexy_islower(hexy_toupper(i)))
+			return -1;
+	}
+
+	return 0;
+}
+#else
+HEXY_API int hexy_unit_tests(void) {
+	/* Unit tests turned off, function still available */
 	return 0;
 }
 #endif
-
 
 #ifdef HEXY_DEFINE_MAIN
 
@@ -796,15 +943,20 @@ Email:   " HEXY_EMAIL "\n\
 License: " HEXY_LICENSE "\n\
 Version: " HEXY_VERSION "\n\n\
 A customizable hex-dump library and utility. This program returns zero\n\
-on success and non-zero on failure.\n\n\
+on success and non-zero on failure. If `-r` is specified and a multiple\n\
+of the bytes specified by `-g` is not provided then the last group is left\n\
+unreversed.\n\n\
 Options:\n\n\
 \t-h\tPrint this help message and exit.\n\
+\t-t\tRun built in self tests and exit (zero indicates success).\n\
 \t-b #\tSet base for output, valid ranges are from 2 to 36.\n\
 \t-B #\tSet base for address printing, uses same base as byte output if not set.\n\
 \t-n #\tSet number of columns of values to print out.\n\
-\t-g #\tGroup bytes together in the given number of bytes.\n\
+\t-g #\tGroup bytes together in the given number of bytes. (default = 1).\n\
 \t-s str\tPerform a hexdump on the given string and then exit.\n\
 \t-o k=v\tSet a number of key-value pair options.\n\
+\t-r\tReverse byte order, no effect if `-g` option is 1.\n\
+\t-R\tRaw mode; turn off printing everything except bytes.\n\
 \n\
 Options settable by `-o` flag:\n\n";
 	const int r1 = fprintf(out, fmt, arg0);
@@ -836,28 +988,25 @@ int main(int argc, char **argv) {
 		{ .opt = "chars-off",    .v.b = &h->chars_off,     .type = HEXY_OPTIONS_BOOL_E,   .help = "Turn character view off", },
 		{ .opt = "address-off",  .v.b = &h->addresses_off, .type = HEXY_OPTIONS_BOOL_E,   .help = "Turn address printing off", },
 		{ .opt = "newlines-off", .v.b = &h->newlines_off,  .type = HEXY_OPTIONS_BOOL_E,   .help = "Turn newline printing off", },
-		{ .opt = "uppercase-on", .v.b = &h->uppercase_on,  .type = HEXY_OPTIONS_BOOL_E,   .help = "Turn on printing upcase hex values", },
-		{ .opt = "rev-grp-on",   .v.b = &h->rev_grp_on,    .type = HEXY_OPTIONS_BOOL_E,   .help = "Reverse the order of byte groups", },
+		{ .opt = "uppercase",    .v.b = &h->uppercase_on,  .type = HEXY_OPTIONS_BOOL_E,   .help = "Turn on printing upcase hex values", },
+		{ .opt = "reverse",      .v.b = &h->rev_grp_on,    .type = HEXY_OPTIONS_BOOL_E,   .help = "Reverse the order of byte groups", },
 	};
 
-	for (int ch = 0; (ch = hexy_getopt(&opt, argc, argv, "hb#B#n#g#s:o:")) != -1;) {
+	for (int ch = 0; (ch = hexy_getopt(&opt, argc, argv, "hb#B#n#g#s:o:rRt")) != -1;) {
 		switch (ch) {
 		case 'h': return hexy_help(stderr, argv[0], &kv[0], HEXY_NELEMS(kv)) < 0;
 		case 'b': h->base = opt.narg; break;
 		case 'B': h->abase = opt.narg; break;
 		case 'n': h->ncols = opt.narg; break;
 		case 'g': h->group = opt.narg; break;
+		case 'r': h->rev_grp_on = true; break;
+		case 'R': h->chars_off = true; h->newlines_off = true; h->addresses_off = true; break;
 		case 'o': if (hexy_options_set(&kv[0], HEXY_NELEMS(kv), opt.arg, stderr) < 0) return 1; break;
 		case 's': if (hexy_sf(h, opt.arg, stdout) < 0) return 1; break;
+		case 't': return hexy_unit_tests() < 0;
 		default: return 1;
 		}
 	}
-
-	/*hexy_unescape(h->sep_adr);
-	hexy_unescape(h->sep_byt);
-	hexy_unescape(h->sep_ch1);
-	hexy_unescape(h->sep_ch2);
-	hexy_unescape(h->sep_eol);*/
 
 	h->io = io; /* -s option sets I/O struct if used, it needs to be reset here. */
 	for (int i = opt.index; i < argc; i++) {

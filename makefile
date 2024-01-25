@@ -1,28 +1,13 @@
-CFLAGS=-std=c99 -Wall -Wextra -pedantic -O2 -Wmissing-prototypes
+CFLAGS=-std=c99 -Wall -Wextra -pedantic -O2 -Wmissing-prototypes -fwrapv
 CXXFLAGS=-Wall -Wextra -pedantic -O2
-#
-#default all: cpp c
-#
-#run test: cpp c
-#	@echo "C Version"
-#	./c
-#	@echo "C++ Version"
-#	./cpp
-#
-#c.o: c.c localely.h makefile
-#	${CC} ${CFLAGS} $< -c -o $@
-#
-#cpp.o: cpp.cpp localely.h makefile
-#	${CXX} ${CXXFLAGS} $< -c -o $@
-#
-#
 TARGET=hexy
 
 .PHONY: all run test clean default
 
 default all: ${TARGET}
 
-run test: ${TARGET}
+run test: ${TARGET} lib${TARGET}.a
+	./${TARGET} -t
 	./${TARGET} ${TARGET}.h
 
 ${TARGET}: c.c ${TARGET}.h makefile
@@ -31,9 +16,13 @@ ${TARGET}: c.c ${TARGET}.h makefile
 cpp: cpp.cpp ${TARGET}.h makefile
 	${CXX} ${CXXFLAGS} $< -o $@
 
-
 ${TARGET}.o: hexy.c hexy.h makefile
-	${CC} ${CFLAGS} -DHEXY_IMPLEMENTATION $< -c -o $@
+	${CC} ${CFLAGS} $< -c -o $@
+
+lib.o: lib.c hexy.h makefile
+
+lib${TARGET}.a: lib.o
+	ar rcs $@ lib.o
 
 clean:
 	git clean -dffx
